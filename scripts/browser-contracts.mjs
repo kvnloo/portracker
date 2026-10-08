@@ -66,6 +66,60 @@ async function memoryLabels(page, options) {
   }
 }
 
+async function peerWarning(page, options) {
+  await page.goto(options.baseUrl + '/?server=local', { waitUntil: 'domcontentloaded' });
+  await page.getByPlaceholder('Search ports, processes...').waitFor();
+  const add = page.getByRole('button', { name: 'Add Server', exact: true });
+  const tip = page.getByRole('button', { name: 'Not now', exact: true });
+  if (await tip.isVisible()) await tip.click();
+  if (options.viewport.width < 768) await page.getByRole('button', { name: 'Open sidebar', exact: true }).click();
+  await add.waitFor();
+  await add.click();
+  await page.locator('#label').fill('Security fixture');
+  await page.locator('#server-url').fill('http://fixture:8080');
+  await page.locator('#apiKey').fill('synthetic-ui-key');
+  const warning = page.getByText('HTTP sends this key without encryption. Use HTTPS or an encrypted VPN on untrusted networks.', { exact: true });
+  await warning.waitFor();
+  await warning.scrollIntoViewIfNeeded();
+  const bounds = await warning.boundingBox();
+  assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= options.viewport.width);
+  await page.screenshot({ path: path.join(options.artifacts, `${options.viewport.width}-peer-warning.png`), animations: 'disabled' });
+  await page.locator('#server-url').fill('https://fixture:9443');
+  await warning.waitFor({ state: 'hidden' });
+  assert.equal(await warning.count(), 0);
+  await page.goto(options.baseUrl + '/?server=local', { waitUntil: 'domcontentloaded' });
+  await page.getByPlaceholder('Search ports, processes...').waitFor();
+}
+
+async function remoteDiagnostics(page, options) {
+  const scan = await page.request.get(options.baseUrl + '/api/servers/auth-peer/scan');
+  assert.equal(scan.status(), 200);
+  const port = (await scan.json()).ports.find(row => Number(row.host_port) === 18080);
+  assert(port?.container_id, 'Discovered peer port must identify its container');
+  const previousLayout = await page.evaluate(() => localStorage.getItem('portLayout'));
+  for (const layout of ['list', 'grid', 'table']) {
+  await page.evaluate(value => localStorage.setItem('portLayout', value), layout);
+  await page.goto(`${options.baseUrl}/?server=auth-peer&container=${encodeURIComponent(port.container_id)}`, { waitUntil: 'domcontentloaded' });
+  await page.getByRole('heading', { name: 'Container Details', exact: true }).waitFor();
+  await page.getByRole('button', { name: /More Details/ }).click();
+  await page.getByRole('button', { name: /JSON \(raw inspect\)/ }).click();
+  const guidance = page.getByText('Raw diagnostics require signing in on this server directly. Peer keys allow standard details only.', { exact: true });
+  await guidance.waitFor(); await guidance.scrollIntoViewIfNeeded();
+  assert.equal(await page.getByRole('button', { name: 'Load Raw', exact: true }).count(), 0);
+  const link = page.getByRole('link', { name: 'Open remote server', exact: true });
+  assert.equal(await link.getAttribute('href'), `http://auth-peer:4999/?server=local&container=${encodeURIComponent(port.container_id)}`);
+  await link.scrollIntoViewIfNeeded();
+  const linkBounds = await link.boundingBox();
+  assert(linkBounds && linkBounds.x >= 0 && linkBounds.x + linkBounds.width <= options.viewport.width && linkBounds.y >= 0 && linkBounds.y + linkBounds.height <= options.viewport.height, 'Remote login action is clipped');
+  const bounds = await guidance.boundingBox();
+  assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= options.viewport.width);
+  await page.screenshot({ path: path.join(options.artifacts, `${options.viewport.width}-remote-diagnostics-${layout}.png`), animations: 'disabled' });
+  }
+  await page.evaluate(value => { if (value === null) localStorage.removeItem('portLayout'); else localStorage.setItem('portLayout', value); }, previousLayout);
+  await page.goto(options.baseUrl + '/?server=local', { waitUntil: 'domcontentloaded' });
+  await page.getByPlaceholder('Search ports, processes...').waitFor();
+}
+
 async function viewportContract(browser, options) {
   const context = await browser.newContext({ viewport: options.viewport, reducedMotion: 'reduce' });
   const page = await context.newPage();
@@ -88,6 +142,7 @@ async function viewportContract(browser, options) {
     await memoryLabels(page, options);
     await releaseNotice(page, options.version);
     await settings(page);
+    await peerWarning(page, options);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await search.waitFor();
     await search.fill('18080');
@@ -100,6 +155,7 @@ async function viewportContract(browser, options) {
     const portBounds = await port.boundingBox();
     assert(portBounds && portBounds.x >= 0 && portBounds.x + portBounds.width <= options.viewport.width, 'Port result is clipped');
     await page.screenshot({ path: path.join(options.artifacts, `${options.viewport.width}-ports.png`), fullPage: true, animations: 'disabled' });
+    await remoteDiagnostics(page, options);
     await page.locator('button').filter({ has: page.locator('svg.lucide-user') }).click();
     await page.getByRole('menuitem', { name: 'Logout', exact: true }).click();
     await page.getByRole('button', { name: 'Sign In', exact: true }).waitFor();

@@ -72,8 +72,8 @@ async function requestAutoxposeJson(baseUrl, endpoint, options = {}) {
         );
 
         request = requestImplementation(target, {
-          method: "GET",
-          headers: { Accept: "application/json" },
+          method: options.method || "GET",
+          headers: { Accept: "application/json", ...options.headers },
           lookup: createPinnedLookup(resolution.addresses),
           agent: false,
         }, (response) => {
@@ -92,6 +92,7 @@ async function requestAutoxposeJson(baseUrl, endpoint, options = {}) {
             size += buffer.length;
             if (size > maxResponseBytes) {
               const error = new Error("Autoxpose response exceeds the size limit");
+              error.code = "RESPONSE_TOO_LARGE";
               fail(error);
               response.destroy();
               request?.destroy();
@@ -119,5 +120,6 @@ async function requestAutoxposeJson(baseUrl, endpoint, options = {}) {
 }
 
 module.exports = {
+  createPinnedLookup,
   requestAutoxposeJson,
 };
